@@ -1,0 +1,157 @@
+#Tabla cliente
+use ctic;
+CREATE EXTERNAL TABLE IF NOT EXISTS ctic.cliente1(
+idcliente string COMMENT 'IdCliente',
+dni string COMMENT 'DNI',
+apellidopaterno string COMMENT 'ApellidoPaterno',
+apellidomaterno string COMMENT 'ApellidoMaterno',
+nombres string COMMENT 'Nombres',
+genero string COMMENT 'Genero',
+direccion string COMMENT 'Direccion',
+distrito string COMMENT 'Distrito',
+correo string COMMENT 'Correo',
+telefono1 int COMMENT 'Telefono1',
+telefono2 int COMMENT 'Telefono2'
+)
+COMMENT 'Tabla cliente'
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE
+LOCATION '/empresa/cliente'
+tblproperties("skip.header.line.count" = "1");
+
+#Tabla producto
+use ctic;
+CREATE EXTERNAL TABLE IF NOT EXISTS ctic.producto1(
+ idproducto string COMMENT 'IdProducto',
+ descproducto string COMMENT 'DescProducto',
+ familia string COMMENT 'Familia',
+ conjunto string COMMENT 'Conjunto',
+ familiaconjunto map<string,string> COMMENT 'FamiliaConjunto'
+)
+ COMMENT 'Tabla producto'
+ ROW FORMAT DELIMITED
+ FIELDS TERMINATED BY '|'
+ COLLECTION ITEMS TERMINATED BY ','
+ MAP KEYS TERMINATED BY ':'
+ STORED AS TEXTFILE
+ LOCATION '/empresa/producto'
+ tblproperties("skip.header.line.count" = "1");
+
+#Tabla tienda
+use ctic;
+CREATE EXTERNAL TABLE IF NOT EXISTS ctic.tienda1(
+ IdTienda string,
+ Sucursal string,
+ Distrito string,
+ Tipo string,
+ DistritoTipo struct<Distrito:STRING,Tipo:string>
+ )
+ COMMENT 'Tabla tienda'
+ ROW FORMAT DELIMITED
+ FIELDS TERMINATED BY '|'
+ COLLECTION ITEMS TERMINATED BY ','
+ MAP KEYS TERMINATED BY ':'
+ LOCATION '/empresa/tienda'
+ tblproperties("skip.header.line.count" = "1");
+
+#Tabla transacción
+use ctic;
+CREATE EXTERNAL TABLE IF NOT EXISTS ctic.transaccion2(
+idcliente string COMMENT 'IdCliente',
+monto float COMMENT 'Monto',
+formatotransaccion string COMMENT 'FormatoTransaccion',
+tipotransaccion string COMMENT 'TipoTransaccion',
+idtienda string COMMENT 'IdTienda',
+fecha date COMMENT 'Fecha',
+idproducto string COMMENT 'IdProducto',
+unidades float COMMENT 'Unidades
+)
+COMMENT 'Tabla transaccion'
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LINES TERMINATED BY '\n'
+STORED AS TEXTFILE
+LOCATION '/empresa/transaccion'
+tblproperties("skip.header.line.count" = "1");
+
+
+#Partición estática
+use ctic;
+CREATE TABLE ctic.tabla_particion_estatica
+(
+    Fecha String,
+    TipoCliente String,
+    TipoTransaccion String,
+    Monto String
+)
+PARTITIONED BY (mensual STRING)
+STORED AS PARQUET
+LOCATION '/empresa/tabla_particion_estatica';
+
+//Agregamos data
+insert into ctic.tabla_particion_estatica partition(mensual ='201809')
+select 
+  from_unixtime (unix_timestamp(Concat(substring(fecha,1,4),SUBSTRING(Fecha,5,2), SUBSTRING(Fecha,7,2)), 'yyyyMMdd'), 'yyyy-MM-dd') as Fecha,
+  case
+    when Monto < 50 then 'Standard'
+    when Monto between 51 and 100 then 'Medium'
+    else 'Top'
+  end as TipoCliente,
+  case
+    when TipoTransaccion = 'BOL' then 'Boleta'    
+    else 'Factura'
+  end as TipoTransaccion,
+  cast(Monto as decimal(19, 2)) as Monto
+from ctic.transaccion2;
+
+#Partición Dinámica
+use ctic;
+CREATE TABLE ctic.tabla_particion_dinamica
+(
+    TipoCliente String,
+    TipoTransaccion String,
+    Monto String
+)
+PARTITIONED BY (Fecha string)
+STORED AS PARQUET
+LOCATION '/empresa/tabla_particion_dinamica';
+
+
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert into table ctic.tabla_particion_dinamica partition (Fecha)
+SELECT
+  case
+    when Monto < 50 then 'Standard'
+    when Monto between 51 and 100 then 'Medium'
+    else 'Top'
+  end as TipoCliente,
+  case
+    when TipoTransaccion = 'BOL' then 'Boleta'    
+    else 'Factura'
+  end as TipoTransaccion,
+  cast(Monto as decimal(19, 2)) as Monto,
+  from_unixtime (unix_timestamp(Concat(substring(fecha,1,4),SUBSTRING(Fecha,5,2), SUBSTRING(Fecha,7,2)), 'yyyyMMdd'), 'yyyy-MM-dd') as Fecha
+FROM ctic.transaccion2;
+
+
+#Bucketing
+use ctic;
+CREATE EXTERNAL TABLE IF NOT EXISTS ctic.cliente_buckets (
+ IdTienda string,
+ Sucursal string,
+ Distrito string,
+ Tipo string,
+ DistritoTipo struct<Distrito:STRING,Tipo:string>
+ )
+ CLUSTERED BY (Sucursal) INTO 2 BUCKETS 
+ ROW FORMAT DELIMITED
+ FIELDS TERMINATED BY '|'
+ COLLECTION ITEMS TERMINATED BY ','
+ MAP KEYS TERMINATED BY ':'
+LOCATION '/empresa/tabla_bucketing';
+
+set map.reduce.tasks = 2;
+set hive.enforce.bucketing = true;
+INSERT OVERWRITE TABLE ctic.cliente_buckets SELECT * FROM ctic.tienda1;
